@@ -6,7 +6,7 @@
     <title>Language Selector Configuration</title>
 </head>
 <body>
-    <div data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button">
+    <div data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
         <div data-role="content">
             <div class="content-primary">
                 <form class="languageSelectorConfigurationForm">
@@ -20,6 +20,7 @@
                             <li>Flag buttons for quick language selection</li>
                             <li>AniWorld-inspired UI design</li>
                             <li>One-click playback with pre-selected audio/subtitle tracks</li>
+                            <li>Automated library scanning for language options</li>
                         </ul>
                         
                         <h3>Usage:</h3>
@@ -33,9 +34,109 @@
                             <li><strong>US Flag:</strong> English audio, no subtitles</li>
                         </ul>
                     </div>
+
+                    <div class="verticalSection">
+                        <h2>Library Scanning</h2>
+                        
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input type="checkbox" is="emby-checkbox" id="enableAutoScan" />
+                                <span>Enable Automatic Library Scanning</span>
+                            </label>
+                            <div class="fieldDescription">Automatically scan libraries to detect language options</div>
+                        </div>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input type="checkbox" is="emby-checkbox" id="scanOnStartup" />
+                                <span>Scan on Server Startup</span>
+                            </label>
+                            <div class="fieldDescription">Run library scan when Jellyfin server starts</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel" for="scanIntervalHours">Scan Interval (Hours)</label>
+                            <input type="number" id="scanIntervalHours" is="emby-input" min="1" max="168" />
+                            <div class="fieldDescription">How often to scan libraries (1-168 hours, default: 24)</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <button is="emby-button" type="button" class="raised button-submit" id="runScanNow">
+                                <span>Run Scan Now</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2>Advanced Settings</h2>
+                        
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input type="checkbox" is="emby-checkbox" id="enableDebugLogging" />
+                                <span>Enable Debug Logging</span>
+                            </label>
+                            <div class="fieldDescription">Enable detailed logging for troubleshooting</div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Save</span>
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>
     </div>
+
+    <script type="text/javascript">
+        var LanguageSelectorConfig = {
+            pluginId: "d4c4a3e2-9b7a-4f5c-8e1d-2a3b4c5d6e7f"
+        };
+
+        document.querySelector('.languageSelectorConfigurationForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            Dashboard.showLoadingMsg();
+
+            var form = this;
+            ApiClient.getPluginConfiguration(LanguageSelectorConfig.pluginId).then(function (config) {
+                config.EnableAutoScan = form.querySelector('#enableAutoScan').checked;
+                config.ScanOnStartup = form.querySelector('#scanOnStartup').checked;
+                config.ScanIntervalHours = parseInt(form.querySelector('#scanIntervalHours').value) || 24;
+                config.EnableDebugLogging = form.querySelector('#enableDebugLogging').checked;
+
+                ApiClient.updatePluginConfiguration(LanguageSelectorConfig.pluginId, config).then(function () {
+                    Dashboard.processPluginConfigurationUpdateResult();
+                });
+            });
+        });
+
+        document.querySelector('#runScanNow').addEventListener('click', function () {
+            Dashboard.showLoadingMsg();
+            ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('ScheduledTasks/Running/LanguageSelectorLibraryScan')
+            }).then(function () {
+                Dashboard.hideLoadingMsg();
+                Dashboard.alert('Library scan started. Check Scheduled Tasks for progress.');
+            }, function () {
+                Dashboard.hideLoadingMsg();
+                Dashboard.alert('Failed to start library scan');
+            });
+        });
+
+        document.addEventListener('DOMContentLoaded', function () {
+            Dashboard.showLoadingMsg();
+
+            ApiClient.getPluginConfiguration(LanguageSelectorConfig.pluginId).then(function (config) {
+                document.querySelector('#enableAutoScan').checked = config.EnableAutoScan || false;
+                document.querySelector('#scanOnStartup').checked = config.ScanOnStartup !== false;
+                document.querySelector('#scanIntervalHours').value = config.ScanIntervalHours || 24;
+                document.querySelector('#enableDebugLogging').checked = config.EnableDebugLogging || false;
+
+                Dashboard.hideLoadingMsg();
+            });
+        });
+    </script>
 </body>
 </html>

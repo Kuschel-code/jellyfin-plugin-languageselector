@@ -19,6 +19,7 @@ artifacts/
 dist/
 *.nupkg
 *.snupkg
+*.zip
 
 ## OS
 Thumbs.db

@@ -23,7 +23,23 @@ public class LanguageDetector
         { "jp", "Japanese" },
         { "us", "English" }
     };
-    
+
+    // Flag icons that ship with the plugin (see Web/flags). Options whose
+    // FlagIcon is not in this set have no asset and must not be surfaced.
+    private static readonly HashSet<string> SupportedFlags = new()
+    {
+        "de",
+        "jp",
+        "us",
+        "jp-de",
+        "jp-us"
+    };
+
+    public bool IsSupportedFlag(string? flagIcon)
+    {
+        return !string.IsNullOrEmpty(flagIcon) && SupportedFlags.Contains(flagIcon);
+    }
+
     public string NormalizeLanguageCode(string? languageCode)
     {
         if (string.IsNullOrWhiteSpace(languageCode))

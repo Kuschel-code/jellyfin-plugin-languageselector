@@ -125,10 +125,11 @@ public class MediaStreamAnalyzer
         }
         
         var uniqueOptions = options
+            .Where(o => _languageDetector.IsSupportedFlag(o.FlagIcon))
             .GroupBy(o => o.Id)
             .Select(g => g.First())
             .ToList();
-        
+
         return uniqueOptions;
     }
     

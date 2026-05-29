@@ -374,13 +374,21 @@
             const container = this.createContainer();
             const buttonGroup = this.createButtonGroup();
 
+            let renderedCount = 0;
             this.languageOptions.forEach(option => {
                 const button = this.createFlagButton(option);
-                buttonGroup.appendChild(button);
+                if (button) {
+                    buttonGroup.appendChild(button);
+                    renderedCount++;
+                }
             });
 
+            if (renderedCount === 0) {
+                return;
+            }
+
             container.appendChild(buttonGroup);
-            
+
             const parentElement = playButton.parentElement;
             if (parentElement) {
                 parentElement.insertBefore(container, playButton.nextSibling);
@@ -400,14 +408,19 @@
         }
 
         createFlagButton(option) {
+            const flagConfig = FLAGS[option.flagIcon];
+            if (!flagConfig) {
+                // No matching flag asset for this language combination – skip
+                // it rather than showing a misleading default flag.
+                return null;
+            }
+
             const button = document.createElement('button');
             button.className = 'language-flag-button';
             button.setAttribute('data-audio-index', option.audioStreamIndex);
             button.setAttribute('data-subtitle-index', option.subtitleStreamIndex !== undefined && option.subtitleStreamIndex !== null ? option.subtitleStreamIndex : -1);
             button.setAttribute('title', option.displayName || this.getFlagLabel(option.flagIcon));
 
-            const flagConfig = FLAGS[option.flagIcon] || FLAGS['de'];
-            
             const img = document.createElement('img');
             img.src = `${CONFIG.flagIconsPath}${flagConfig.icon}`;
             img.alt = flagConfig.label;

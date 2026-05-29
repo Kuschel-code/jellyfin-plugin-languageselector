@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data.Enums;
+using Jellyfin.Plugin.LanguageSelector.Services;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -48,22 +51,63 @@ public class LibraryScanTask : IScheduledTask
 
         try
         {
-            var rootFolder = _libraryManager.GetUserRootFolder();
-            if (rootFolder == null)
+            var analyzer = new MediaStreamAnalyzer(new LanguageDetector());
+
+            var query = new InternalItemsQuery
             {
-                _logger.LogWarning("User root folder not available");
+                IncludeItemTypes = new[] { BaseItemKind.Episode, BaseItemKind.Movie },
+                Recursive = true,
+                IsVirtualItem = false
+            };
+
+            var items = _libraryManager.GetItemList(query);
+            var total = items.Count;
+
+            if (total == 0)
+            {
+                _logger.LogInformation("No media items found to scan");
+                progress?.Report(100);
                 return;
             }
 
-            _logger.LogInformation("Library scan initiated. Language options will be detected on-demand when users browse media.");
-            
-            progress?.Report(50);
+            _logger.LogInformation("Scanning {Total} media items for language options", total);
 
-            await Task.Delay(100, cancellationToken);
-            
-            progress?.Report(100);
+            var itemsWithOptions = 0;
+            var processed = 0;
 
-            _logger.LogInformation("Library scan completed successfully");
+            foreach (var item in items)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var optionCount = analyzer.GenerateLanguageOptions(item).Count;
+                    if (optionCount > 0)
+                    {
+                        itemsWithOptions++;
+
+                        if (config.EnableDebugLogging)
+                        {
+                            _logger.LogDebug(
+                                "{ItemName}: {OptionCount} language option(s)",
+                                item.Name,
+                                optionCount);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to analyze item {ItemName}", item.Name);
+                }
+
+                processed++;
+                progress?.Report((double)processed / total * 100);
+            }
+
+            _logger.LogInformation(
+                "Library scan completed: {WithOptions} of {Total} items have selectable language options",
+                itemsWithOptions,
+                total);
         }
         catch (OperationCanceledException)
         {
@@ -74,6 +118,8 @@ public class LibraryScanTask : IScheduledTask
             _logger.LogError(ex, "Error during library scan");
             throw;
         }
+
+        await Task.CompletedTask;
     }
 
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()

@@ -1,0 +1,73 @@
+name: Release Plugin
+
+# Build, package and publish the plugin. Pushing a tag like `v1.0.3` builds
+# the DLL, zips it, computes the MD5 checksum (the value manifest.json needs)
+# and attaches the zip to the matching GitHub release. A manual run
+# (workflow_dispatch) builds and uploads the zip as a workflow artifact
+# without creating a release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Read plugin version
+        id: version
+        run: |
+          CSPROJ="Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj"
+          VERSION=$(grep -oPm1 '(?<=<AssemblyVersion>)[^<]+' "$CSPROJ")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION"
+
+      - name: Build (Release)
+        run: dotnet build Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj -c Release
+
+      - name: Package
+        id: package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP="jellyfin-plugin-languageselector_${VERSION}.zip"
+          DLL_DIR="Jellyfin.Plugin.LanguageSelector/bin/Release/net8.0"
+          mkdir -p dist
+          (cd "$DLL_DIR" && zip -j "$GITHUB_WORKSPACE/dist/$ZIP" "Jellyfin.Plugin.LanguageSelector.dll")
+          CHECKSUM=$(md5sum "dist/$ZIP" | awk '{print $1}')
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Plugin package"
+            echo ""
+            echo "- File: \`$ZIP\`"
+            echo "- MD5 checksum: \`$CHECKSUM\`"
+            echo ""
+            echo "Put this checksum into the matching \`manifest.json\` version entry."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.zip }}
+          path: dist/${{ steps.package.outputs.zip }}
+
+      - name: Create release and attach zip
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ steps.package.outputs.zip }}
+          body: |
+            Automated release build.
+
+            **MD5 checksum:** `${{ steps.package.outputs.checksum }}`

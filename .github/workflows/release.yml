@@ -1,15 +1,17 @@
 name: Release Plugin
 
-# One-click build & publish. Trigger this workflow manually (Actions tab ->
-# "Release Plugin" -> "Run workflow"), optionally giving a new version and a
-# changelog. It builds the DLL, packages the zip, computes the MD5 checksum,
-# writes a matching entry into manifest.json, commits & pushes that change, and
-# creates a GitHub release with the zip attached.
+# Build & publish the plugin. Two ways to trigger:
+#  * Push a tag like v1.0.3  -> builds, packages and creates the release.
+#  * "Run workflow" (manual) -> same, plus it can bump the version and write the
+#    checksum back into manifest.json (committed to the selected branch).
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Plugin version (4 parts, e.g. 1.0.4.0). Leave empty to reuse the version already in the csproj.'
+        description: 'Plugin version (4 parts, e.g. 1.0.4.0). Leave empty to reuse the csproj version.'
         required: false
         default: ''
       changelog:
@@ -26,6 +28,7 @@ jobs:
     env:
       CSPROJ: Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj
       TARGET_ABI: 10.10.0.0
+      CHANGELOG: ${{ github.event.inputs.changelog || 'Maintenance release.' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,8 +69,16 @@ jobs:
           CHECKSUM=$(md5sum "dist/$ZIP" | awk '{print $1}')
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Plugin package"
+            echo "- File: \`$ZIP\`"
+            echo "- MD5 checksum: \`$CHECKSUM\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Update manifest.json
+      # Only on manual runs: write the real checksum into manifest.json and push
+      # it back to the selected branch (a tag run has no branch to commit to).
+      - name: Update manifest.json and push
+        if: github.event_name == 'workflow_dispatch'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
@@ -76,7 +87,6 @@ jobs:
           REPO="${{ github.repository }}"
           SOURCEURL="https://github.com/${REPO}/releases/download/${TAG}/${ZIP}"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          CHANGELOG="${{ github.event.inputs.changelog }}"
 
           ENTRY=$(jq -n \
             --arg version "$VERSION" \
@@ -87,15 +97,10 @@ jobs:
             --arg ts "$TIMESTAMP" \
             '{version:$version, changelog:$changelog, targetAbi:$abi, sourceUrl:$url, checksum:$checksum, timestamp:$ts}')
 
-          # Drop any existing entry for this version, then prepend the fresh one.
           jq --arg version "$VERSION" --argjson entry "$ENTRY" \
             '.[0].versions |= ([$entry] + (map(select(.version != $version))))' \
             manifest.json > manifest.tmp && mv manifest.tmp manifest.json
 
-      - name: Commit, tag and push
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$CSPROJ" manifest.json
@@ -104,6 +109,12 @@ jobs:
           git push origin HEAD:"${{ github.ref_name }}"
           git push -f origin "$TAG"
 
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.zip }}
+          path: dist/${{ steps.package.outputs.zip }}
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -111,6 +122,6 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           files: dist/${{ steps.package.outputs.zip }}
           body: |
-            ${{ github.event.inputs.changelog }}
+            ${{ env.CHANGELOG }}
 
             **MD5 checksum:** `${{ steps.package.outputs.checksum }}`

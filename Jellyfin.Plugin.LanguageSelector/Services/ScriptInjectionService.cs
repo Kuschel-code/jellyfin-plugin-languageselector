@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
@@ -19,8 +20,13 @@ public class ScriptInjectionService : IHostedService
     // Served by Jellyfin from the plugin's embedded resources (see Plugin.GetPages).
     private const string ScriptName = "LanguageSelector/language-selector.js";
 
-    // Unique marker so we can detect (and avoid duplicating) a previous injection.
+    // Unique id on the injected tag so we can find, refresh or de-duplicate it.
     private const string Marker = "languageselector-injected";
+
+    // Matches a previously injected tag (any version) so it can be replaced.
+    private static readonly Regex ExistingTag = new(
+        "\\s*<script id=\"" + Marker + "\"[^>]*></script>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly IApplicationPaths _appPaths;
     private readonly ILogger<ScriptInjectionService> _logger;
@@ -65,12 +71,6 @@ public class ScriptInjectionService : IHostedService
 
         var html = File.ReadAllText(indexPath);
 
-        if (html.Contains(Marker, StringComparison.Ordinal))
-        {
-            _logger.LogDebug("Language Selector script already injected");
-            return;
-        }
-
         var closingBody = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
         if (closingBody < 0)
         {
@@ -78,22 +78,33 @@ public class ScriptInjectionService : IHostedService
             return;
         }
 
+        // Strip any previous injection first so a version change refreshes the
+        // tag (cache-busting) and accidental duplicates are collapsed.
+        var stripped = ExistingTag.Replace(html, string.Empty);
+
         var version = Plugin.Instance?.Version?.ToString() ?? "0";
         var tag = $"<script id=\"{Marker}\" plugin=\"LanguageSelector\" defer " +
                   $"src=\"configurationpage?name={ScriptName}&v={version}\"></script>\n";
 
-        var updated = html.Insert(closingBody, tag);
+        var insertAt = stripped.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        var updated = stripped.Insert(insertAt, tag);
+
+        if (string.Equals(updated, html, StringComparison.Ordinal))
+        {
+            _logger.LogDebug("Language Selector script already up to date (v{Version})", version);
+            return;
+        }
 
         try
         {
             File.WriteAllText(indexPath, updated);
-            _logger.LogInformation("Injected Language Selector script into web client index.html");
+            _logger.LogInformation("Injected Language Selector script (v{Version}) into web client index.html", version);
         }
-        catch (UnauthorizedAccessException ex)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
             _logger.LogWarning(
                 ex,
-                "No write permission for {IndexPath}; the web client must be writable for the flag buttons to load",
+                "Could not write {IndexPath}; the web client directory must be writable for the flag buttons to load",
                 indexPath);
         }
     }

@@ -88,7 +88,7 @@
 
             try {
                 const response = await fetch(
-                    `${CONFIG.apiBaseUrl}/Users/${ApiClient.getCurrentUserId()}/Items/${this.currentItemId}`,
+                    `${CONFIG.apiBaseUrl}/Users/${ApiClient.getCurrentUserId()}/Items/${this.currentItemId}?fields=MediaStreams`,
                     {
                         headers: {
                             'X-Emby-Token': ApiClient.accessToken()
@@ -99,14 +99,36 @@
                 if (!response.ok) return;
 
                 const item = await response.json();
-                
-                if (item.Type === 'Episode') {
-                    this.waitForPlayButton();
-                } else if (item.Type === 'Series' || item.Type === 'Season') {
-                    this.showSeriesLanguages(item);
+
+                switch (item.Type) {
+                    case 'Series':
+                    case 'Season':
+                        // Aggregate languages across all episodes of the series.
+                        this.showSeriesLanguages(item);
+                        break;
+                    case 'Movie':
+                    case 'Episode':
+                    case 'Video':
+                        // Show which languages this single item is available in,
+                        // based on its own audio/subtitle streams.
+                        this.showItemLanguages(item);
+                        // Episodes additionally get the one-click play selector.
+                        if (item.Type === 'Episode') {
+                            this.waitForPlayButton();
+                        }
+                        break;
+                    default:
+                        break;
                 }
             } catch (error) {
                 console.error('Error checking item type:', error);
+            }
+        }
+
+        showItemLanguages(item) {
+            const languages = this.collectLanguagesFromEpisodes([item]);
+            if (languages.length > 0) {
+                this.renderLanguageInfo(languages);
             }
         }
 
@@ -136,7 +158,7 @@
                 const languages = this.collectLanguagesFromEpisodes(data.Items || []);
                 
                 if (languages.length > 0) {
-                    this.renderSeriesLanguageInfo(languages);
+                    this.renderLanguageInfo(languages);
                 }
             } catch (error) {
                 console.error('Error fetching series languages:', error);
@@ -183,14 +205,20 @@
             return map[lang.toLowerCase()] || null;
         }
 
-        renderSeriesLanguageInfo(languages) {
+        renderLanguageInfo(languages) {
             const existingInfo = document.querySelector('.series-language-info');
             if (existingInfo) {
                 existingInfo.remove();
             }
 
-            const detailLogo = document.querySelector('.detailLogo');
-            if (!detailLogo) return;
+            const flagConfigs = languages
+                .map(langCode => FLAGS[langCode])
+                .filter(Boolean);
+
+            if (flagConfigs.length === 0) return;
+
+            const anchor = this.findDetailAnchor();
+            if (!anchor || !anchor.parentElement) return;
 
             const container = document.createElement('div');
             container.className = 'series-language-info';
@@ -204,10 +232,7 @@
             const flagGroup = document.createElement('div');
             flagGroup.style.cssText = 'display: flex; gap: 0.5em; flex-wrap: wrap;';
 
-            languages.forEach(langCode => {
-                const flagConfig = FLAGS[langCode];
-                if (!flagConfig) return;
-
+            flagConfigs.forEach(flagConfig => {
                 const flagItem = document.createElement('div');
                 flagItem.className = 'language-info-flag';
                 flagItem.style.cssText = 'display: flex; align-items: center; gap: 0.5em; padding: 0.5em 1em; background: rgba(255,255,255,0.1); border-radius: 6px;';
@@ -227,7 +252,38 @@
             });
 
             container.appendChild(flagGroup);
-            detailLogo.parentElement.insertBefore(container, detailLogo.nextSibling);
+            anchor.parentElement.insertBefore(container, anchor.nextSibling);
+        }
+
+        // Detail pages for movies/episodes don't always expose .detailLogo, and
+        // several cached detail pages can coexist in the DOM. Pick an anchor
+        // inside the currently visible detail page, trying a few known spots.
+        findDetailAnchor() {
+            const pages = document.querySelectorAll('.itemDetailPage, .detailPage, [data-type="movies"], .page');
+            let scope = document;
+            for (const page of pages) {
+                if (page.offsetParent !== null) {
+                    scope = page;
+                    break;
+                }
+            }
+
+            const selectors = [
+                '.detailLogo',
+                '.itemName',
+                '.nameContainer',
+                '.detailPagePrimaryContainer',
+                '.detailImageContainer',
+                '.mainDetailButtons',
+                '.detailButtons'
+            ];
+
+            for (const selector of selectors) {
+                const el = scope.querySelector(selector);
+                if (el) return el;
+            }
+
+            return null;
         }
 
         async checkEpisodeList() {
@@ -296,7 +352,10 @@
         }
 
         getItemIdFromUrl() {
-            const match = window.location.hash.match(/\/item\?id=([a-f0-9]+)/i);
+            // Jellyfin's web client uses #/details?id=... (10.10) and older
+            // builds used #/item?id=...; support both, and tolerate an id with
+            // or without dashes.
+            const match = window.location.hash.match(/\/(?:details|item)\?id=([a-f0-9-]+)/i);
             return match ? match[1] : null;
         }
 

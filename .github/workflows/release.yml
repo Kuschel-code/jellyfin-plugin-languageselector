@@ -1,15 +1,21 @@
 name: Release Plugin
 
-# Build, package and publish the plugin. Pushing a tag like `v1.0.3` builds
-# the DLL, zips it, computes the MD5 checksum (the value manifest.json needs)
-# and attaches the zip to the matching GitHub release. A manual run
-# (workflow_dispatch) builds and uploads the zip as a workflow artifact
-# without creating a release.
+# One-click build & publish. Trigger this workflow manually (Actions tab ->
+# "Release Plugin" -> "Run workflow"), optionally giving a new version and a
+# changelog. It builds the DLL, packages the zip, computes the MD5 checksum,
+# writes a matching entry into manifest.json, commits & pushes that change, and
+# creates a GitHub release with the zip attached.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Plugin version (4 parts, e.g. 1.0.4.0). Leave empty to reuse the version already in the csproj.'
+        required: false
+        default: ''
+      changelog:
+        description: 'Changelog text for this release.'
+        required: false
+        default: 'Maintenance release.'
 
 permissions:
   contents: write
@@ -17,26 +23,39 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      CSPROJ: Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj
+      TARGET_ABI: 10.10.0.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Read plugin version
+      - name: Resolve version
         id: version
         run: |
-          CSPROJ="Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj"
-          VERSION=$(grep -oPm1 '(?<=<AssemblyVersion>)[^<]+' "$CSPROJ")
+          INPUT="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT" ]; then
+            VERSION="$INPUT"
+            sed -i -E "s#<AssemblyVersion>[^<]+</AssemblyVersion>#<AssemblyVersion>${VERSION}</AssemblyVersion>#" "$CSPROJ"
+            sed -i -E "s#<FileVersion>[^<]+</FileVersion>#<FileVersion>${VERSION}</FileVersion>#" "$CSPROJ"
+          else
+            VERSION=$(grep -oPm1 '(?<=<AssemblyVersion>)[^<]+' "$CSPROJ")
+          fi
+          TAG="v$(echo "$VERSION" | cut -d. -f1-3)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building version $VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION as tag $TAG"
 
       - name: Build (Release)
-        run: dotnet build Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj -c Release
+        run: dotnet build "$CSPROJ" -c Release
 
-      - name: Package
+      - name: Package and checksum
         id: package
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -47,27 +66,51 @@ jobs:
           CHECKSUM=$(md5sum "dist/$ZIP" | awk '{print $1}')
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
-          {
-            echo "## Plugin package"
-            echo ""
-            echo "- File: \`$ZIP\`"
-            echo "- MD5 checksum: \`$CHECKSUM\`"
-            echo ""
-            echo "Put this checksum into the matching \`manifest.json\` version entry."
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.zip }}
-          path: dist/${{ steps.package.outputs.zip }}
+      - name: Update manifest.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          CHECKSUM="${{ steps.package.outputs.checksum }}"
+          ZIP="${{ steps.package.outputs.zip }}"
+          REPO="${{ github.repository }}"
+          SOURCEURL="https://github.com/${REPO}/releases/download/${TAG}/${ZIP}"
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          CHANGELOG="${{ github.event.inputs.changelog }}"
 
-      - name: Create release and attach zip
-        if: startsWith(github.ref, 'refs/tags/')
+          ENTRY=$(jq -n \
+            --arg version "$VERSION" \
+            --arg changelog "$CHANGELOG" \
+            --arg abi "$TARGET_ABI" \
+            --arg url "$SOURCEURL" \
+            --arg checksum "$CHECKSUM" \
+            --arg ts "$TIMESTAMP" \
+            '{version:$version, changelog:$changelog, targetAbi:$abi, sourceUrl:$url, checksum:$checksum, timestamp:$ts}')
+
+          # Drop any existing entry for this version, then prepend the fresh one.
+          jq --arg version "$VERSION" --argjson entry "$ENTRY" \
+            '.[0].versions |= ([$entry] + (map(select(.version != $version))))' \
+            manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+
+      - name: Commit, tag and push
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$CSPROJ" manifest.json
+          git commit -m "Release ${VERSION}" || echo "Nothing to commit"
+          git tag -f "$TAG"
+          git push origin HEAD:"${{ github.ref_name }}"
+          git push -f origin "$TAG"
+
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
           files: dist/${{ steps.package.outputs.zip }}
           body: |
-            Automated release build.
+            ${{ github.event.inputs.changelog }}
 
             **MD5 checksum:** `${{ steps.package.outputs.checksum }}`

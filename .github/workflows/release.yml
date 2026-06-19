@@ -1,13 +1,17 @@
 name: Release Plugin
 
-# Build & publish the plugin. Two ways to trigger:
-#  * Push a tag like v1.0.3  -> builds, packages and creates the release.
-#  * "Run workflow" (manual) -> same, plus it can bump the version and write the
-#    checksum back into manifest.json (committed to the selected branch).
+# Fully automatic releases — no manual step required.
+# On every push, the workflow builds the plugin, and if no GitHub release exists
+# yet for the current csproj version it packages the zip, creates the release
+# (the workflow's own GITHUB_TOKEN may create tags/releases), writes the real
+# MD5 checksum into manifest.json and commits it back (with [skip ci] so it does
+# not trigger itself). Re-running for an already-released version is skipped.
+# "Run workflow" can also bump the version via the inputs below.
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+      - claude/review-requested-R6zaS
   workflow_dispatch:
     inputs:
       version:
@@ -15,9 +19,9 @@ on:
         required: false
         default: ''
       changelog:
-        description: 'Changelog text for this release.'
+        description: 'Changelog text (only used when introducing a new version).'
         required: false
-        default: 'Maintenance release.'
+        default: ''
 
 permissions:
   contents: write
@@ -28,7 +32,7 @@ jobs:
     env:
       CSPROJ: Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj
       TARGET_ABI: 10.10.0.0
-      CHANGELOG: ${{ github.event.inputs.changelog || 'Maintenance release.' }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,16 +57,30 @@ jobs:
           TAG="v$(echo "$VERSION" | cut -d. -f1-3)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Releasing version $VERSION as tag $TAG"
+          echo "Version $VERSION (tag $TAG)"
+
+      - name: Skip if this version is already released
+        id: gate
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists -> nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Test
+        if: steps.gate.outputs.skip != 'true'
         run: dotnet test Jellyfin.Plugin.LanguageSelector.sln -c Release
 
       - name: Build (Release)
+        if: steps.gate.outputs.skip != 'true'
         run: dotnet build "$CSPROJ" -c Release
 
       - name: Package and checksum
         id: package
+        if: steps.gate.outputs.skip != 'true'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ZIP="jellyfin-plugin-languageselector_${VERSION}.zip"
@@ -78,53 +96,55 @@ jobs:
             echo "- MD5 checksum: \`$CHECKSUM\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Only on manual runs: write the real checksum into manifest.json and push
-      # it back to the selected branch (a tag run has no branch to commit to).
       - name: Update manifest.json and push
-        if: github.event_name == 'workflow_dispatch'
+        if: steps.gate.outputs.skip != 'true'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.version.outputs.tag }}"
           CHECKSUM="${{ steps.package.outputs.checksum }}"
           ZIP="${{ steps.package.outputs.zip }}"
-          REPO="${{ github.repository }}"
-          SOURCEURL="https://github.com/${REPO}/releases/download/${TAG}/${ZIP}"
+          SOURCEURL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ZIP}"
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          INPUT_CHANGELOG="${{ github.event.inputs.changelog }}"
 
-          ENTRY=$(jq -n \
-            --arg version "$VERSION" \
-            --arg changelog "$CHANGELOG" \
-            --arg abi "$TARGET_ABI" \
-            --arg url "$SOURCEURL" \
-            --arg checksum "$CHECKSUM" \
-            --arg ts "$TIMESTAMP" \
-            '{version:$version, changelog:$changelog, targetAbi:$abi, sourceUrl:$url, checksum:$checksum, timestamp:$ts}')
-
-          jq --arg version "$VERSION" --argjson entry "$ENTRY" \
-            '.[0].versions |= ([$entry] + (map(select(.version != $version))))' \
-            manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+          # If the version entry exists, only refresh checksum/url/timestamp and
+          # keep its changelog. Otherwise prepend a new entry.
+          jq --arg v "$VERSION" --arg cs "$CHECKSUM" --arg url "$SOURCEURL" \
+             --arg ts "$TIMESTAMP" --arg abi "$TARGET_ABI" --arg cl "$INPUT_CHANGELOG" '
+            if any(.[0].versions[]; .version == $v)
+            then .[0].versions |= map(
+                   if .version == $v
+                   then .checksum = $cs | .sourceUrl = $url | .timestamp = $ts | .targetAbi = $abi
+                   else . end)
+            else .[0].versions |= ([{
+                   version: $v,
+                   changelog: (if $cl == "" then "Automated release." else $cl end),
+                   targetAbi: $abi,
+                   sourceUrl: $url,
+                   checksum: $cs,
+                   timestamp: $ts
+                 }] + .)
+            end' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$CSPROJ" manifest.json
-          git commit -m "Release ${VERSION}" || echo "Nothing to commit"
-          git tag -f "$TAG"
-          git push origin HEAD:"${{ github.ref_name }}"
-          git push -f origin "$TAG"
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.zip }}
-          path: dist/${{ steps.package.outputs.zip }}
+          if git diff --cached --quiet; then
+            echo "manifest already up to date"
+          else
+            git commit -m "Release ${VERSION} [skip ci]"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
 
       - name: Create GitHub release
+        if: steps.gate.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/${{ steps.package.outputs.zip }}
           body: |
-            ${{ env.CHANGELOG }}
+            Automated release of ${{ steps.version.outputs.version }}.
 
             **MD5 checksum:** `${{ steps.package.outputs.checksum }}`

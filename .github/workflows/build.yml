@@ -1,33 +1,151 @@
-name: Build
+name: CI
 
-# Compile the plugin on every push and pull request so build breaks are
-# caught before release.
+# Builds and tests on every push/PR, and on pushes to the release branches it
+# also publishes a release automatically (no manual step): if no GitHub release
+# exists yet for the current csproj version it packages the zip, creates the
+# release with the workflow's own token, writes the real MD5 checksum into
+# manifest.json and commits it back with [skip ci]. Already-released versions
+# are skipped.
 on:
   push:
     branches:
       - '**'
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Plugin version (4 parts, e.g. 1.0.4.0). Leave empty to reuse the csproj version.'
+        required: false
+        default: ''
+      changelog:
+        description: 'Changelog text (only used when introducing a new version).'
+        required: false
+        default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
+  ci:
     runs-on: ubuntu-latest
+    env:
+      CSPROJ: Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj
+      SOLUTION: Jellyfin.Plugin.LanguageSelector.sln
+      TARGET_ABI: 10.10.0.0
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
+      - name: Resolve version
+        id: version
+        run: |
+          INPUT="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT" ]; then
+            VERSION="$INPUT"
+            sed -i -E "s#<AssemblyVersion>[^<]+</AssemblyVersion>#<AssemblyVersion>${VERSION}</AssemblyVersion>#" "$CSPROJ"
+            sed -i -E "s#<FileVersion>[^<]+</FileVersion>#<FileVersion>${VERSION}</FileVersion>#" "$CSPROJ"
+          else
+            VERSION=$(grep -oPm1 '(?<=<AssemblyVersion>)[^<]+' "$CSPROJ")
+          fi
+          TAG="v$(echo "$VERSION" | cut -d. -f1-3)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION (tag $TAG)"
+
       - name: Restore
-        run: dotnet restore Jellyfin.Plugin.LanguageSelector.sln
+        run: dotnet restore "$SOLUTION"
 
       - name: Build (Release)
-        run: dotnet build Jellyfin.Plugin.LanguageSelector.sln -c Release --no-restore
+        run: dotnet build "$SOLUTION" -c Release --no-restore
 
       - name: Test
-        run: dotnet test Jellyfin.Plugin.LanguageSelector.sln -c Release --no-build
+        run: dotnet test "$SOLUTION" -c Release --no-build
+
+      # ---- Release (only on branch pushes, never on PRs) ----
+      - name: Decide whether to release
+        id: gate
+        if: github.event_name != 'pull_request'
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists -> skipping"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package and checksum
+        id: package
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP="jellyfin-plugin-languageselector_${VERSION}.zip"
+          DLL_DIR="Jellyfin.Plugin.LanguageSelector/bin/Release/net8.0"
+          mkdir -p dist
+          (cd "$DLL_DIR" && zip -j "$GITHUB_WORKSPACE/dist/$ZIP" "Jellyfin.Plugin.LanguageSelector.dll")
+          CHECKSUM=$(md5sum "dist/$ZIP" | awk '{print $1}')
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Released package"
+            echo "- File: \`$ZIP\`"
+            echo "- MD5 checksum: \`$CHECKSUM\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update manifest.json and push
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          CHECKSUM="${{ steps.package.outputs.checksum }}"
+          ZIP="${{ steps.package.outputs.zip }}"
+          SOURCEURL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ZIP}"
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          INPUT_CHANGELOG="${{ github.event.inputs.changelog }}"
+
+          jq --arg v "$VERSION" --arg cs "$CHECKSUM" --arg url "$SOURCEURL" \
+             --arg ts "$TIMESTAMP" --arg abi "$TARGET_ABI" --arg cl "$INPUT_CHANGELOG" '
+            if any(.[0].versions[]; .version == $v)
+            then .[0].versions |= map(
+                   if .version == $v
+                   then .checksum = $cs | .sourceUrl = $url | .timestamp = $ts | .targetAbi = $abi
+                   else . end)
+            else .[0].versions |= ([{
+                   version: $v,
+                   changelog: (if $cl == "" then "Automated release." else $cl end),
+                   targetAbi: $abi,
+                   sourceUrl: $url,
+                   checksum: $cs,
+                   timestamp: $ts
+                 }] + .)
+            end' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$CSPROJ" manifest.json
+          if git diff --cached --quiet; then
+            echo "manifest already up to date"
+          else
+            git commit -m "Release ${VERSION} [skip ci]"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
+
+      - name: Create GitHub release
+        if: steps.gate.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: dist/${{ steps.package.outputs.zip }}
+          body: |
+            Automated release of ${{ steps.version.outputs.version }}.
+
+            **MD5 checksum:** `${{ steps.package.outputs.checksum }}`

@@ -3,79 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Language Selector Configuration</title>
+    <title>Language Selector</title>
 </head>
 <body>
-    <div data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
+    <div id="LanguageSelectorConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+         data-require="emby-input,emby-button,emby-checkbox,emby-select">
         <div data-role="content">
             <div class="content-primary">
-                <form class="languageSelectorConfigurationForm">
+                <form id="LanguageSelectorConfigForm">
                     <div class="verticalSection">
-                        <h2>Language Selector Plugin</h2>
-                        <p>This plugin adds one-click language selection buttons to episode detail pages.</p>
-                        
-                        <h3>Features:</h3>
-                        <ul>
-                            <li>Automatic detection of available audio and subtitle tracks</li>
-                            <li>Flag buttons for quick language selection</li>
-                            <li>AniWorld-inspired UI design</li>
-                            <li>One-click playback with pre-selected audio/subtitle tracks</li>
-                            <li>Automated library scanning for language options</li>
-                        </ul>
-                        
-                        <h3>Usage:</h3>
-                        <p>Navigate to any episode detail page. If multiple language options are detected, flag buttons will appear below the play button.</p>
-                        
-                        <h3>Supported Combinations:</h3>
-                        <ul>
-                            <li><strong>German Flag:</strong> German audio, no subtitles</li>
-                            <li><strong>JP/DE Flag:</strong> Japanese audio + German subtitles</li>
-                            <li><strong>JP/EN Flag:</strong> Japanese audio + English subtitles</li>
-                            <li><strong>US Flag:</strong> English audio, no subtitles</li>
-                        </ul>
+                        <h2>Language Selector</h2>
+                        <p>Shows flag buttons indicating the audio/subtitle languages each movie, episode and series is available in. On a movie or episode you can click a flag to start playback with that language.</p>
                     </div>
 
                     <div class="verticalSection">
-                        <h2>Library Scanning</h2>
-                        
-                        <div class="checkboxContainer checkboxContainer-withDescription">
-                            <label>
-                                <input type="checkbox" is="emby-checkbox" id="enableAutoScan" />
-                                <span>Enable Automatic Library Scanning</span>
-                            </label>
-                            <div class="fieldDescription">Automatically scan libraries to detect language options</div>
-                        </div>
+                        <h2>Display</h2>
 
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
-                                <input type="checkbox" is="emby-checkbox" id="scanOnStartup" />
-                                <span>Scan on Server Startup</span>
+                                <input type="checkbox" is="emby-checkbox" id="InjectClientScript" />
+                                <span>Show language flags in the web client</span>
                             </label>
-                            <div class="fieldDescription">Run library scan when Jellyfin server starts</div>
+                            <div class="fieldDescription">Injects the client script into the web interface. After changing this, restart Jellyfin. If your web folder is read-only, the script cannot be injected automatically.</div>
+                        </div>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input type="checkbox" is="emby-checkbox" id="AutoDetectLanguages" />
+                                <span>Detect languages automatically</span>
+                            </label>
+                            <div class="fieldDescription">Detect available audio/subtitle languages from media streams.</div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h2>Library scan schedule</h2>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input type="checkbox" is="emby-checkbox" id="EnableAutoScan" />
+                                <span>Enable scheduled scan</span>
+                            </label>
+                            <div class="fieldDescription">Periodically scan libraries to detect language options.</div>
+                        </div>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label>
+                                <input type="checkbox" is="emby-checkbox" id="ScanOnStartup" />
+                                <span>Also scan on server startup</span>
+                            </label>
                         </div>
 
                         <div class="inputContainer">
-                            <label class="inputLabel" for="scanIntervalHours">Scan Interval (Hours)</label>
-                            <input type="number" id="scanIntervalHours" is="emby-input" min="1" max="168" />
-                            <div class="fieldDescription">How often to scan libraries (1-168 hours, default: 24)</div>
+                            <label class="inputLabel inputLabelUnfocused" for="ScanIntervalHours">Scan interval (hours)</label>
+                            <input type="number" id="ScanIntervalHours" is="emby-input" min="1" max="168" />
+                            <div class="fieldDescription">How often the scheduled task runs (1-168 hours, default 24).</div>
                         </div>
 
                         <div class="inputContainer">
-                            <button is="emby-button" type="button" class="raised button-submit" id="runScanNow">
-                                <span>Run Scan Now</span>
+                            <button is="emby-button" type="button" class="raised button-submit block" id="RunScanNow">
+                                <span>Run scan now</span>
                             </button>
                         </div>
                     </div>
 
                     <div class="verticalSection">
-                        <h2>Advanced Settings</h2>
-                        
+                        <h2>Advanced</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label>
-                                <input type="checkbox" is="emby-checkbox" id="enableDebugLogging" />
-                                <span>Enable Debug Logging</span>
+                                <input type="checkbox" is="emby-checkbox" id="EnableDebugLogging" />
+                                <span>Enable debug logging</span>
                             </label>
-                            <div class="fieldDescription">Enable detailed logging for troubleshooting</div>
                         </div>
                     </div>
 
@@ -87,56 +85,59 @@
                 </form>
             </div>
         </div>
-    </div>
 
-    <script type="text/javascript">
-        var LanguageSelectorConfig = {
-            pluginId: "d4c4a3e2-9b7a-4f5c-8e1d-2a3b4c5d6e7f"
-        };
+        <script type="text/javascript">
+            (function () {
+                var pluginId = 'd4c4a3e2-9b7a-4f5c-8e1d-2a3b4c5d6e7f';
+                var page = document.querySelector('#LanguageSelectorConfigPage');
 
-        document.querySelector('.languageSelectorConfigurationForm').addEventListener('submit', function (e) {
-            e.preventDefault();
-            Dashboard.showLoadingMsg();
+                function loadConfig() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        page.querySelector('#InjectClientScript').checked = config.InjectClientScript !== false;
+                        page.querySelector('#AutoDetectLanguages').checked = config.AutoDetectLanguages !== false;
+                        page.querySelector('#EnableAutoScan').checked = config.EnableAutoScan !== false;
+                        page.querySelector('#ScanOnStartup').checked = config.ScanOnStartup !== false;
+                        page.querySelector('#ScanIntervalHours').value = config.ScanIntervalHours || 24;
+                        page.querySelector('#EnableDebugLogging').checked = config.EnableDebugLogging === true;
+                        Dashboard.hideLoadingMsg();
+                    });
+                }
 
-            var form = this;
-            ApiClient.getPluginConfiguration(LanguageSelectorConfig.pluginId).then(function (config) {
-                config.EnableAutoScan = form.querySelector('#enableAutoScan').checked;
-                config.ScanOnStartup = form.querySelector('#scanOnStartup').checked;
-                config.ScanIntervalHours = parseInt(form.querySelector('#scanIntervalHours').value) || 24;
-                config.EnableDebugLogging = form.querySelector('#enableDebugLogging').checked;
+                page.addEventListener('pageshow', loadConfig);
 
-                ApiClient.updatePluginConfiguration(LanguageSelectorConfig.pluginId, config).then(function () {
-                    Dashboard.processPluginConfigurationUpdateResult();
+                page.querySelector('#LanguageSelectorConfigForm').addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        config.InjectClientScript = page.querySelector('#InjectClientScript').checked;
+                        config.AutoDetectLanguages = page.querySelector('#AutoDetectLanguages').checked;
+                        config.EnableAutoScan = page.querySelector('#EnableAutoScan').checked;
+                        config.ScanOnStartup = page.querySelector('#ScanOnStartup').checked;
+                        config.ScanIntervalHours = parseInt(page.querySelector('#ScanIntervalHours').value, 10) || 24;
+                        config.EnableDebugLogging = page.querySelector('#EnableDebugLogging').checked;
+                        ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+                    return false;
                 });
-            });
-        });
 
-        document.querySelector('#runScanNow').addEventListener('click', function () {
-            Dashboard.showLoadingMsg();
-            ApiClient.ajax({
-                type: 'POST',
-                url: ApiClient.getUrl('ScheduledTasks/Running/LanguageSelectorLibraryScan')
-            }).then(function () {
-                Dashboard.hideLoadingMsg();
-                Dashboard.alert('Library scan started. Check Scheduled Tasks for progress.');
-            }, function () {
-                Dashboard.hideLoadingMsg();
-                Dashboard.alert('Failed to start library scan');
-            });
-        });
-
-        document.addEventListener('DOMContentLoaded', function () {
-            Dashboard.showLoadingMsg();
-
-            ApiClient.getPluginConfiguration(LanguageSelectorConfig.pluginId).then(function (config) {
-                document.querySelector('#enableAutoScan').checked = config.EnableAutoScan || false;
-                document.querySelector('#scanOnStartup').checked = config.ScanOnStartup !== false;
-                document.querySelector('#scanIntervalHours').value = config.ScanIntervalHours || 24;
-                document.querySelector('#enableDebugLogging').checked = config.EnableDebugLogging || false;
-
-                Dashboard.hideLoadingMsg();
-            });
-        });
-    </script>
+                page.querySelector('#RunScanNow').addEventListener('click', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.ajax({
+                        type: 'POST',
+                        url: ApiClient.getUrl('ScheduledTasks/Running/LanguageSelectorLibraryScan')
+                    }).then(function () {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert('Library scan started. See Scheduled Tasks for progress.');
+                    }, function () {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert('Failed to start the library scan.');
+                    });
+                });
+            })();
+        </script>
+    </div>
 </body>
 </html>

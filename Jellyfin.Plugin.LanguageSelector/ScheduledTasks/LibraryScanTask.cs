@@ -144,28 +144,29 @@ public class LibraryScanTask : IScheduledTask
 
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        if (Plugin.Instance == null)
+        // Always provide a schedule so the task appears under Scheduled Tasks
+        // with a recurring trigger. Enable/disable is enforced in ExecuteAsync,
+        // and the interval can be tuned in the Scheduled Tasks UI.
+        var intervalHours = Plugin.Instance?.Configuration.ScanIntervalHours ?? 24;
+        if (intervalHours <= 0)
         {
-            return Enumerable.Empty<TaskTriggerInfo>();
+            intervalHours = 24;
         }
 
-        var config = Plugin.Instance.Configuration;
-        var triggers = new List<TaskTriggerInfo>();
+        var triggers = new List<TaskTriggerInfo>
+        {
+            new TaskTriggerInfo
+            {
+                Type = TaskTriggerInfo.TriggerInterval,
+                IntervalTicks = TimeSpan.FromHours(intervalHours).Ticks
+            }
+        };
 
-        if (config.ScanOnStartup)
+        if (Plugin.Instance?.Configuration.ScanOnStartup ?? true)
         {
             triggers.Add(new TaskTriggerInfo
             {
                 Type = TaskTriggerInfo.TriggerStartup
-            });
-        }
-
-        if (config.EnableAutoScan && config.ScanIntervalHours > 0)
-        {
-            triggers.Add(new TaskTriggerInfo
-            {
-                Type = TaskTriggerInfo.TriggerInterval,
-                IntervalTicks = TimeSpan.FromHours(config.ScanIntervalHours).Ticks
             });
         }
 

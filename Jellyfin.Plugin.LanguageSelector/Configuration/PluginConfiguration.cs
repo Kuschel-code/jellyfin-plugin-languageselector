@@ -5,6 +5,8 @@ namespace Jellyfin.Plugin.LanguageSelector.Configuration;
 public class PluginConfiguration : BasePluginConfiguration
 {
     public bool EnableDebugLogging { get; set; } = false;
+
+    public bool InjectClientScript { get; set; } = true;
     
     public bool AutoDetectLanguages { get; set; } = true;
     

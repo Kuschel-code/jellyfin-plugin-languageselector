@@ -55,6 +55,9 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Releasing version $VERSION as tag $TAG"
 
+      - name: Test
+        run: dotnet test Jellyfin.Plugin.LanguageSelector.sln -c Release
+
       - name: Build (Release)
         run: dotnet build "$CSPROJ" -c Release
 

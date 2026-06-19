@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.DataAnnotations;
+using Jellyfin.Plugin.LanguageSelector.Models;
 using Jellyfin.Plugin.LanguageSelector.Services;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
@@ -40,14 +41,26 @@ public class LanguageOptionsController : ControllerBase
             _logger.LogInformation("Fetching language options for item: {ItemId}", itemId);
             
             var item = _libraryManager.GetItemById(itemId);
-            
+
             if (item == null)
             {
                 _logger.LogWarning("Item not found: {ItemId}", itemId);
                 return NotFound(new { error = "Item not found", itemId = itemId.ToString() });
             }
-            
-            var response = _mediaStreamAnalyzer.GetLanguageOptionsForItem(item);
+
+            var config = Plugin.Instance?.Configuration;
+
+            if (config != null && !config.AutoDetectLanguages)
+            {
+                _logger.LogInformation("Automatic language detection is disabled in plugin settings");
+                return Ok(new LanguageOptionsResponse
+                {
+                    ItemId = item.Id.ToString(),
+                    ItemName = item.Name ?? "Unknown"
+                });
+            }
+
+            var response = _mediaStreamAnalyzer.GetLanguageOptionsForItem(item, config?.PreferredLanguages);
             
             _logger.LogInformation(
                 "Generated {OptionCount} language options for item: {ItemName}",

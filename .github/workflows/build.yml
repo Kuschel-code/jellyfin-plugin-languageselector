@@ -24,7 +24,10 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj
+        run: dotnet restore Jellyfin.Plugin.LanguageSelector.sln
 
       - name: Build (Release)
-        run: dotnet build Jellyfin.Plugin.LanguageSelector/Jellyfin.Plugin.LanguageSelector.csproj -c Release --no-restore
+        run: dotnet build Jellyfin.Plugin.LanguageSelector.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test Jellyfin.Plugin.LanguageSelector.sln -c Release --no-build

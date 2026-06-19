@@ -60,6 +60,26 @@ public class LibraryScanTask : IScheduledTask
                 IsVirtualItem = false
             };
 
+            // Restrict to the libraries chosen in settings, if any were given.
+            if (config.LibrariesToScan is { Length: > 0 } selectedLibraries)
+            {
+                var ancestorIds = _libraryManager.GetVirtualFolders()
+                    .Where(vf => selectedLibraries.Contains(vf.Name, StringComparer.OrdinalIgnoreCase))
+                    .Select(vf => Guid.TryParse(vf.ItemId, out var id) ? id : Guid.Empty)
+                    .Where(id => id != Guid.Empty)
+                    .ToArray();
+
+                if (ancestorIds.Length > 0)
+                {
+                    query.AncestorIds = ancestorIds;
+                    _logger.LogInformation("Restricting scan to {Count} selected librarie(s)", ancestorIds.Length);
+                }
+                else
+                {
+                    _logger.LogWarning("No configured library matched by name; scanning all libraries");
+                }
+            }
+
             var items = _libraryManager.GetItemList(query);
             var total = items.Count;
 

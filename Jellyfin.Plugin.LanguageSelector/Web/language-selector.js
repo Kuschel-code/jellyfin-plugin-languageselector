@@ -21,12 +21,12 @@
     }
 
     function flagUrl(icon) {
-        // Served via the plugin configurationpage endpoint; ApiClient.getUrl keeps
-        // the server address and any configured base path correct.
+        // Served anonymously with image/svg+xml by the plugin's own controller;
+        // ApiClient.getUrl keeps the server address and base path correct.
         if (typeof ApiClient !== 'undefined' && ApiClient && ApiClient.getUrl) {
-            return ApiClient.getUrl('web/configurationpage', { name: 'LanguageSelector/flags/' + icon });
+            return ApiClient.getUrl('LanguageSelector/flags/' + icon);
         }
-        return '/web/configurationpage?name=LanguageSelector/flags/' + icon;
+        return '/LanguageSelector/flags/' + icon;
     }
 
     const FLAGS = {
@@ -94,7 +94,9 @@
             this.isOnListPage = false;
 
             // Re-render even for the same id if our flags were wiped by a redraw.
-            if (itemId === this.currentItemId && document.querySelector('.series-language-info')) {
+            // Scope the check to the visible page: cached, hidden detail pages can
+            // still contain a stale flags container.
+            if (itemId === this.currentItemId && this.getVisiblePage().querySelector('.series-language-info')) {
                 return;
             }
 
@@ -310,18 +312,21 @@
             anchor.parentElement.insertBefore(container, anchor.nextSibling);
         }
 
+        getVisiblePage() {
+            const pages = document.querySelectorAll('.itemDetailPage, .detailPage, .page');
+            for (const page of pages) {
+                if (page.offsetParent !== null) {
+                    return page;
+                }
+            }
+            return document;
+        }
+
         // Detail pages for movies/episodes don't always expose .detailLogo, and
         // several cached detail pages can coexist in the DOM. Pick an anchor
         // inside the currently visible detail page.
         findDetailAnchor() {
-            const pages = document.querySelectorAll('.itemDetailPage, .detailPage, .page');
-            let scope = document;
-            for (const page of pages) {
-                if (page.offsetParent !== null) {
-                    scope = page;
-                    break;
-                }
-            }
+            const scope = this.getVisiblePage();
 
             const selectors = [
                 '.detailPagePrimaryContainer .detailButtons',
@@ -425,18 +430,19 @@
                 };
 
                 let started = false;
-                const managers = [
-                    window.playbackManager,
-                    (typeof ApiClient !== 'undefined' && ApiClient.playbackManager) ? ApiClient.playbackManager : null,
-                    (typeof playbackManager !== 'undefined') ? playbackManager : null
-                ];
 
-                for (const mgr of managers) {
-                    if (mgr && typeof mgr.play === 'function') {
-                        await mgr.play(playOptions);
-                        started = true;
-                        break;
-                    }
+                // The webpack-bundled playback manager is not exposed globally in
+                // modern jellyfin-web, but try it first in case a build provides it.
+                const mgr = window.playbackManager;
+                if (mgr && typeof mgr.play === 'function') {
+                    await mgr.play(playOptions);
+                    started = true;
+                }
+
+                if (!started) {
+                    // Reliable path: remote-control our own session through the
+                    // Sessions API — the same mechanism as Jellyfin's "Play On".
+                    started = await this.playViaSessionsApi(playOptions);
                 }
 
                 if (!started) {
@@ -448,6 +454,48 @@
                 console.error('[LanguageSelector] Error starting playback:', error);
                 this.setButtonLoading(false);
                 this.showError('Failed to start playback. Please try again.');
+            }
+        }
+
+        async playViaSessionsApi(playOptions) {
+            try {
+                const deviceId = ApiClient.deviceId();
+                const sessions = await this.fetchJson(
+                    `${apiBase()}/Sessions?deviceId=${encodeURIComponent(deviceId)}`
+                );
+                if (!sessions || sessions.length === 0) {
+                    console.warn('[LanguageSelector] No controllable session found for this device');
+                    return false;
+                }
+
+                const params = new URLSearchParams();
+                params.set('playCommand', 'PlayNow');
+                params.set('itemIds', this.currentItemId);
+                params.set('audioStreamIndex', playOptions.audioStreamIndex);
+                params.set('subtitleStreamIndex', playOptions.subtitleStreamIndex);
+                if (playOptions.mediaSourceId) {
+                    params.set('mediaSourceId', playOptions.mediaSourceId);
+                }
+                if (playOptions.startPositionTicks) {
+                    params.set('startPositionTicks', playOptions.startPositionTicks);
+                }
+
+                const response = await fetch(
+                    `${apiBase()}/Sessions/${sessions[0].Id}/Playing?${params.toString()}`,
+                    {
+                        method: 'POST',
+                        headers: { 'X-Emby-Token': ApiClient.accessToken() }
+                    }
+                );
+
+                if (!response.ok) {
+                    console.warn('[LanguageSelector] Play command failed:', response.status);
+                    return false;
+                }
+                return true;
+            } catch (error) {
+                console.error('[LanguageSelector] Sessions API playback failed:', error);
+                return false;
             }
         }
 

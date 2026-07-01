@@ -99,7 +99,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 return;
             }
 
-            var indexContents = File.ReadAllText(indexFile);
+            var original = File.ReadAllText(indexFile);
             var basePath = GetBasePath(configurationManager, logger);
 
             var version = Version?.ToString() ?? "1.0.0.0";
@@ -108,25 +108,29 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 version,
                 basePath);
 
-            if (indexContents.Contains(scriptElement, StringComparison.Ordinal))
-            {
-                return;
-            }
-
             // Remove any previous Language Selector script (old version or old
-            // injection style) before inserting the current one.
-            indexContents = Regex.Replace(indexContents, "<script plugin=\"LanguageSelector\".*?></script>", string.Empty);
+            // injection style, attributes in any order) before inserting the
+            // current one. Earlier plugin versions injected a tag with
+            // id="languageselector-injected" and the attributes ordered
+            // differently, which a plugin-first pattern would miss.
+            var cleaned = Regex.Replace(original, "<script[^>]*plugin=\"LanguageSelector\"[^>]*></script>\\n?", string.Empty);
+            cleaned = Regex.Replace(cleaned, "<script[^>]*id=\"languageselector-injected\"[^>]*></script>\\n?", string.Empty);
 
-            var bodyClosing = indexContents.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+            var bodyClosing = cleaned.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
             if (bodyClosing == -1)
             {
                 logger.LogWarning("Language Selector: no closing body tag in {IndexFile}", indexFile);
                 return;
             }
 
-            indexContents = indexContents.Insert(bodyClosing, scriptElement);
+            var updated = cleaned.Insert(bodyClosing, scriptElement);
 
-            File.WriteAllText(indexFile, indexContents);
+            if (string.Equals(updated, original, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            File.WriteAllText(indexFile, updated);
             logger.LogInformation("Language Selector: injected client script into {IndexFile}", indexFile);
         }
         catch (Exception ex)
